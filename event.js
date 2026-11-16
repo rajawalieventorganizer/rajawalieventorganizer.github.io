@@ -95,7 +95,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   injectRegistrationStyles();
 
   // ------------------------------------------------
-  // 3. MENGENALI KOLOM INTI BERDASARKAN LABEL ADMIN
+  // 3. MENGENALI KOLOM INTI FORM BUILDER
   // ------------------------------------------------
 
   const clean = value =>
@@ -108,11 +108,21 @@ document.addEventListener("DOMContentLoaded", async () => {
   const identity = field =>
     `${clean(field.field_key)} ${clean(field.label)}`;
 
+  const normalizedType = field =>
+    clean(field.field_type);
+
+  const isTextField = field =>
+    [
+      "text",
+      "shorttext",
+      "shortanswer",
+      "shortinput",
+      "string",
+      "varchar"
+    ].includes(normalizedType(field));
+
   const isRegistrationType = field =>
     /jenispendaftaran|registrationtype/.test(identity(field));
-
-  const isParticipantName = field =>
-    /namapeserta|namalengkappeserta|namaatlet|namaathlete|namapemain|namaperenang|namapelari|namaanggota|participantname|athletename/.test(identity(field));
 
   const isParticipantRole = field =>
     /peranpeserta|perananggota|rolepeserta|participantrole/.test(identity(field));
@@ -120,18 +130,45 @@ document.addEventListener("DOMContentLoaded", async () => {
   const isWhatsapp = field =>
     /whatsapp|whatsap|nomorwa|nowa|nohp|nomorhp|nomortelepon|notelp|telepon|telephone|handphone|ponsel|phonenumber|phone/.test(identity(field));
 
-  // Nama Klub hanya diperlakukan sebagai nama tim jika event
-  // memang menggunakan model Tim/Grup.
   const isTeamName = field =>
     event.registration_type !== "individual" &&
     /namatim|namaklub|namagroup|namagrup|teamname|clubname/.test(identity(field));
 
+  // Pengenalan nama peserta menggunakan beberapa kemungkinan label.
+  const isParticipantName = field => {
+    const text = identity(field);
+
+    return (
+      /namapeserta|namalengkappeserta|namalengkap|namaatlet|namaathlete|namapemain|namaperenang|namapelari|namaanggota|participantname|athletename|playername/.test(text) ||
+      /participantname|athletename|playername|membername/.test(text)
+    );
+  };
+
   const registrationField = fields.find(isRegistrationType);
-  const participantNameField = fields.find(isParticipantName);
   const participantRoleField = fields.find(isParticipantRole);
 
+  // Cari nama peserta berdasarkan label atau field_key.
+  let participantNameField = fields.find(isParticipantName);
+
+  // Fallback 1: cari field teks yang mengandung kata "nama".
+  if (!participantNameField) {
+    participantNameField = fields.find(field => {
+      const text = identity(field);
+
+      const excluded =
+        /namatim|namaklub|namagroup|namagrup|namasekolah|namaevent|namapanitia|namapenyelenggara|namakontak|namabank/;
+
+      return (
+        (clean(field.label).includes("nama") ||
+          clean(field.field_key).includes("nama")) &&
+        !excluded.test(text) &&
+        isTextField(field)
+      );
+    });
+  }
+
   const whatsappFieldByType = fields.filter(
-    field => clean(field.field_type) === "tel"
+    field => normalizedType(field) === "tel"
   );
 
   const whatsappField =
@@ -139,7 +176,45 @@ document.addEventListener("DOMContentLoaded", async () => {
     (whatsappFieldByType.length === 1 ? whatsappFieldByType[0] : null);
 
   // ------------------------------------------------
-  // 3A. NAMA TIM/KLUB OTOMATIS DIBUAT OLEH SISTEM
+  // 3A. MEMBUAT KOLOM NAMA PESERTA OTOMATIS
+  // ------------------------------------------------
+
+  // Jika tidak ada kolom nama yang dapat dikenali,
+  // gunakan field teks pertama yang bukan kolom sistem.
+  if (!participantNameField) {
+    participantNameField = fields.find(field => {
+      const text = identity(field);
+
+      const excluded =
+        /whatsapp|nomorwa|nowa|nohp|nomorhp|telepon|telephone|handphone|ponsel|namatim|namaklub|namagroup|namagrup|namasekolah|namaevent|namaadmin|namapanitia|email|alamat|password/;
+
+      return (
+        isTextField(field) &&
+        !excluded.test(text) &&
+        field !== registrationField &&
+        field !== participantRoleField &&
+        field !== whatsappField
+      );
+    });
+  }
+
+  // Jika tetap tidak ditemukan, buat kolom nama peserta sistem.
+  if (!participantNameField) {
+    participantNameField = {
+      id: "system-participant-name",
+      field_key: "participant_name",
+      label: "Nama Atlet atau Nama Peserta",
+      field_type: "text",
+      is_required: true,
+      options: [],
+      sort_order: -1
+    };
+
+    fields.unshift(participantNameField);
+  }
+
+  // ------------------------------------------------
+  // 3B. MEMBUAT KOLOM NAMA TIM/KLUB OTOMATIS
   // ------------------------------------------------
 
   let teamNameField = fields.find(isTeamName);
@@ -155,10 +230,12 @@ document.addEventListener("DOMContentLoaded", async () => {
       sort_order: 999999
     };
 
-    // Kolom sistem hanya dibuat di halaman pendaftaran.
-    // Tidak perlu menambahkan atau mengubah data di tabel Supabase.
     fields.push(teamNameField);
   }
+
+  // ------------------------------------------------
+  // 3C. MENENTUKAN PERAN PESERTA
+  // ------------------------------------------------
 
   const roles = Array.isArray(participantRoleField?.options)
     ? participantRoleField.options.map(x => String(x).trim()).filter(Boolean)
@@ -169,7 +246,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   );
 
   const participantDefaultRole =
-    /atlet|athlete|pemain|perenang|pelari/i.test(participantNameField?.label || "")
+    /atlet|athlete|pemain|perenang|pelari/i.test(participantNameField.label || "")
       ? "Atlet"
       : "Peserta";
 
@@ -177,7 +254,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     ? participantDefaultRole
     : (roles[0] || participantDefaultRole);
 
-  // Semua kolom sistem tidak dimasukkan ke custom_data.
+  // Kolom sistem tidak dikirim sebagai custom_data.
   const systemFields = new Set(
     [
       registrationField,
@@ -189,25 +266,25 @@ document.addEventListener("DOMContentLoaded", async () => {
   );
 
   // ------------------------------------------------
-  // 4. VALIDASI KOLOM WAJIB SISTEM
+  // 4. VALIDASI KOLOM FORM BUILDER
   // ------------------------------------------------
 
   const missing = [];
 
   if (!participantNameField) {
-    missing.push("Nama Atlet atau Nama Peserta (Jawaban singkat)");
+    missing.push("Nama Atlet atau Nama Peserta");
   }
 
   if (
     participantNameField &&
-    !["text"].includes(participantNameField.field_type)
+    !isTextField(participantNameField)
   ) {
-    missing.push("Kolom Nama Atlet harus menggunakan Jawaban singkat");
+    missing.push("Kolom Nama Peserta harus menggunakan Jawaban singkat");
   }
 
   if (
     participantRoleField &&
-    participantRoleField.field_type !== "select"
+    normalizedType(participantRoleField) !== "select"
   ) {
     missing.push("Kolom Peran Peserta harus menggunakan Dropdown");
   }
@@ -221,13 +298,10 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   if (
     whatsappField &&
-    !["tel", "text"].includes(whatsappField.field_type)
+    !["tel", "text", "shorttext"].includes(normalizedType(whatsappField))
   ) {
     missing.push("Kolom WhatsApp harus menggunakan Nomor telepon atau Jawaban singkat");
   }
-
-  // Tidak lagi ada validasi Nama Tim yang menggagalkan formulir.
-  // Sistem sudah membuat kolom Nama Tim/Klub secara otomatis.
 
   const registrationOptions = Array.isArray(registrationField?.options)
     ? registrationField.options.map(String)
@@ -252,8 +326,10 @@ document.addEventListener("DOMContentLoaded", async () => {
   if (
     event.registration_type === "both" &&
     registrationField &&
-    (!typeOptions.some(x => x.value === "individual") ||
-      !typeOptions.some(x => x.value === "team"))
+    (
+      !typeOptions.some(x => x.value === "individual") ||
+      !typeOptions.some(x => x.value === "team")
+    )
   ) {
     missing.push("Jenis Pendaftaran harus memiliki pilihan Individu dan Tim/Grup");
   }
@@ -273,10 +349,8 @@ document.addEventListener("DOMContentLoaded", async () => {
     area.innerHTML = `
       <div class="notice">
         <b>Formulir Admin perlu diperbaiki.</b>
-        <p>Halaman ini membaca pertanyaan dari Form Builder pada Panel Admin.</p>
         <p>Periksa kolom berikut:</p>
         <ul>${missing.map(item => `<li>${esc(item)}</li>`).join("")}</ul>
-        <p>Simpan kembali event setelah memperbaiki pertanyaan.</p>
       </div>
     `;
     return;
@@ -293,7 +367,12 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 
   function fieldKey(field) {
-    const raw = String(field.field_key || field.label || `field_${field.id}`);
+    const raw = String(
+      field.field_key ||
+      field.label ||
+      `field_${field.id}`
+    );
+
     return raw.replace(/[^a-zA-Z0-9_-]/g, "_");
   }
 
@@ -304,6 +383,10 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     return "Format dokumen: PDF, DOC, DOCX, XLS, XLSX, PPT, PPTX, atau TXT. Maksimal 10 MB.";
   }
+
+  // ------------------------------------------------
+  // 6. MERENDER PERTANYAAN CUSTOM
+  // ------------------------------------------------
 
   function renderCustomField(field) {
     const key = fieldKey(field);
@@ -340,15 +423,15 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
 
     if (field.field_type === "radio" || field.field_type === "checkbox") {
-      const type = field.field_type;
+      const inputType = field.field_type;
 
       const choices = options.map(option => `
         <label class="gf-public-choice">
           <input
-            type="${type}"
+            type="${inputType}"
             name="${esc(key)}"
             value="${esc(option)}"
-            ${type === "radio" && required ? "required" : ""}
+            ${inputType === "radio" && required ? "required" : ""}
           >
           <span>${esc(option)}</span>
         </label>
@@ -357,13 +440,13 @@ document.addEventListener("DOMContentLoaded", async () => {
       return `
         <fieldset
           class="gf-public-question gf-public-choice-group"
-          data-custom-type="${type}"
+          data-custom-type="${inputType}"
           data-custom-key="${esc(key)}"
           data-custom-required="${required ? "true" : "false"}"
         >
           <legend>${label}</legend>
           ${choices || '<p class="gf-public-empty">Opsi jawaban belum tersedia.</p>'}
-          ${type === "checkbox" && required
+          ${inputType === "checkbox" && required
             ? '<small class="gf-public-help">Pilih minimal satu jawaban.</small>'
             : ""}
         </fieldset>
@@ -387,7 +470,10 @@ document.addEventListener("DOMContentLoaded", async () => {
       `;
     }
 
-    if (field.field_type === "photo_upload" || field.field_type === "document_upload") {
+    if (
+      field.field_type === "photo_upload" ||
+      field.field_type === "document_upload"
+    ) {
       const isPhoto = field.field_type === "photo_upload";
 
       const accept = isPhoto
@@ -412,14 +498,21 @@ document.addEventListener("DOMContentLoaded", async () => {
           <small class="gf-public-help">${fileHint(field)}</small>
           <div class="gf-upload-preview" data-upload-preview="${esc(key)}" hidden></div>
           <small class="gf-upload-note">
-            File akan diunggah dengan aman ke penyimpanan Supabase. Foto maksimal 5 MB
+            File diunggah ke penyimpanan Supabase. Foto maksimal 5 MB
             dan dokumen maksimal 10 MB.
           </small>
         </div>
       `;
     }
 
-    const allowedTypes = ["text", "number", "date", "time", "email", "tel"];
+    const allowedTypes = [
+      "text",
+      "number",
+      "date",
+      "time",
+      "email",
+      "tel"
+    ];
 
     const inputType = allowedTypes.includes(field.field_type)
       ? field.field_type
@@ -448,7 +541,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 
   // ------------------------------------------------
-  // 6. MERENDER KOLOM KHUSUS YANG DIATUR ADMIN
+  // 7. MERENDER KOLOM SISTEM
   // ------------------------------------------------
 
   function renderRegistrationTypeField(field) {
@@ -567,7 +660,9 @@ document.addEventListener("DOMContentLoaded", async () => {
       field === participantNameField ||
       field === participantRoleField
     ) {
-      if (renderedSpecial.has(participantNameField)) return "";
+      if (renderedSpecial.has(participantNameField)) {
+        return "";
+      }
 
       renderedSpecial.add(participantNameField);
 
@@ -608,7 +703,9 @@ document.addEventListener("DOMContentLoaded", async () => {
       `
       : "";
 
-  const generatedWhatsapp = !whatsappField ? renderWhatsapp(null) : "";
+  const generatedWhatsapp = !whatsappField
+    ? renderWhatsapp(null)
+    : "";
 
   const fieldsHtml = fields.map(renderFieldInAdminOrder).join("");
 
@@ -661,23 +758,18 @@ document.addEventListener("DOMContentLoaded", async () => {
   if (!form || !type || !people || !addPersonButton) {
     area.innerHTML = `
       <div class="notice">
-        Formulir tidak dapat dibentuk. Pastikan kolom Nama Atlet/Nama Peserta
-        sudah dibuat di Form Builder Admin.
+        Formulir tidak dapat dibentuk. Periksa kembali konfigurasi Form Builder.
       </div>
     `;
     return;
   }
 
   // ------------------------------------------------
-  // 7. BARIS PESERTA DAN PERAN
+  // 8. BARIS PESERTA DAN PERAN
   // ------------------------------------------------
 
   function isTeamMode() {
     return type.value === "team";
-  }
-
-  function isSupportRole(role) {
-    return /pelatih|coach|manajer|manager|ofisial|official|pendamping|support/i.test(role);
   }
 
   function optionList(values) {
@@ -828,7 +920,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   resetPeople();
 
   // ------------------------------------------------
-  // 8. PRATINJAU PILIHAN FILE
+  // 9. PRATINJAU DAN VALIDASI FILE
   // ------------------------------------------------
 
   form.addEventListener("change", changeEvent => {
@@ -853,6 +945,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
 
     const isPhoto = input.dataset.uploadKind === "photo";
+
     const maxBytes = isPhoto
       ? 5 * 1024 * 1024
       : 10 * 1024 * 1024;
@@ -897,7 +990,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
 
   // ------------------------------------------------
-  // MEMBACA DETAIL ERROR DARI SUPABASE EDGE FUNCTION
+  // 10. MEMBACA DETAIL ERROR EDGE FUNCTION
   // ------------------------------------------------
 
   async function getRegistrationErrorDetail(error) {
@@ -955,7 +1048,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 
   // ------------------------------------------------
-  // 9. VALIDASI DAN SIMPAN PENDAFTARAN
+  // 11. VALIDASI DAN SIMPAN PENDAFTARAN
   // ------------------------------------------------
 
   form.addEventListener("submit", async submitEvent => {
@@ -985,7 +1078,6 @@ document.addEventListener("DOMContentLoaded", async () => {
       return;
     }
 
-    // Validasi isian wajib lainnya.
     if (!form.reportValidity()) return;
 
     const fd = new FormData(form);
@@ -1036,7 +1128,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       return;
     }
 
-    // Ambil file unggahan dan validasi ulang.
+    // Ambil dan validasi ulang file unggahan.
     const selectedUploads = [
       ...form.querySelectorAll("[data-upload-field]")
     ].filter(input =>
@@ -1088,7 +1180,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     const custom = {};
 
-    // Hanya field yang bukan kolom sistem yang disimpan ke custom_data.
+    // Hanya pertanyaan non-sistem yang masuk custom_data.
     fields
       .filter(field => !systemFields.has(field))
       .forEach(field => {
@@ -1120,11 +1212,10 @@ document.addEventListener("DOMContentLoaded", async () => {
         }
       });
 
-    // Upload file dilakukan sebelum pendaftaran dikirim.
-    // Metadata path disimpan di custom_data; bucket dibuat private.
     const uploadedFiles = [];
 
     try {
+      // Upload file ke Supabase Storage.
       for (const input of selectedUploads) {
         const key = input.dataset.uploadKey;
         const file = input.files[0];
@@ -1164,7 +1255,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         };
       }
 
-      // Kontrak payload quick-responder tetap sama.
+      // Kontrak payload quick-responder dipertahankan.
       const payload = {
         event_id: event.id,
         registration_type: registrationType,
@@ -1265,7 +1356,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
 
   // ------------------------------------------------
-  // 10. STYLE FORMULIR PUBLIK
+  // 12. STYLE FORMULIR PUBLIK
   // ------------------------------------------------
 
   function injectRegistrationStyles() {
