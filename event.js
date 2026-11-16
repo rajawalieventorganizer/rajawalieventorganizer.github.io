@@ -1,5 +1,8 @@
+
 document.addEventListener("DOMContentLoaded", async () => {
   const { $, esc, date, money } = window.Rajawali;
+  const db = window.db;
+
   const params = new URLSearchParams(window.location.search);
   const slug = params.get("slug");
 
@@ -7,7 +10,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   const description = $("#event-description");
   const area = $("#registration-area");
 
-  if (!window.db) {
+  if (!db) {
     top.innerHTML = '<div class="empty-state">Supabase belum dikonfigurasi.</div>';
     return;
   }
@@ -108,20 +111,17 @@ document.addEventListener("DOMContentLoaded", async () => {
   const isRegistrationType = field =>
     /jenispendaftaran|registrationtype/.test(identity(field));
 
-  // Mendukung label: Nama Peserta, Nama Atlet, Nama Pemain,
-  // Nama Perenang, Nama Anggota, dan variasi sejenis.
   const isParticipantName = field =>
     /namapeserta|namalengkappeserta|namaatlet|namaathlete|namapemain|namaperenang|namapelari|namaanggota|participantname|athletename/.test(identity(field));
 
   const isParticipantRole = field =>
     /peranpeserta|perananggota|rolepeserta|participantrole/.test(identity(field));
 
-  // Mengenali variasi nama kontak yang umum: WhatsApp, WA, HP, dan telepon.
   const isWhatsapp = field =>
     /whatsapp|whatsap|nomorwa|nowa|nohp|nomorhp|nomortelepon|notelp|telepon|telephone|handphone|ponsel|phonenumber|phone/.test(identity(field));
 
-  // Nama Klub hanya diperlakukan sebagai nama tim jika event memang
-  // memakai model Tim/Grup. Untuk event Individu, ini tetap pertanyaan Admin.
+  // Nama Klub hanya diperlakukan sebagai nama tim jika event
+  // memang menggunakan model Tim/Grup.
   const isTeamName = field =>
     event.registration_type !== "individual" &&
     /namatim|namaklub|namagroup|namagrup|teamname|clubname/.test(identity(field));
@@ -129,6 +129,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   const registrationField = fields.find(isRegistrationType);
   const participantNameField = fields.find(isParticipantName);
   const participantRoleField = fields.find(isParticipantRole);
+
   const whatsappFieldByType = fields.filter(
     field => clean(field.field_type) === "tel"
   );
@@ -136,7 +137,28 @@ document.addEventListener("DOMContentLoaded", async () => {
   const whatsappField =
     fields.find(isWhatsapp) ||
     (whatsappFieldByType.length === 1 ? whatsappFieldByType[0] : null);
-  const teamNameField = fields.find(isTeamName);
+
+  // ------------------------------------------------
+  // 3A. NAMA TIM/KLUB OTOMATIS DIBUAT OLEH SISTEM
+  // ------------------------------------------------
+
+  let teamNameField = fields.find(isTeamName);
+
+  if (event.registration_type !== "individual" && !teamNameField) {
+    teamNameField = {
+      id: "system-team-name",
+      field_key: "team_name",
+      label: "Nama Tim atau Nama Klub",
+      field_type: "text",
+      is_required: true,
+      options: [],
+      sort_order: 999999
+    };
+
+    // Kolom sistem hanya dibuat di halaman pendaftaran.
+    // Tidak perlu menambahkan atau mengubah data di tabel Supabase.
+    fields.push(teamNameField);
+  }
 
   const roles = Array.isArray(participantRoleField?.options)
     ? participantRoleField.options.map(x => String(x).trim()).filter(Boolean)
@@ -155,6 +177,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     ? participantDefaultRole
     : (roles[0] || participantDefaultRole);
 
+  // Semua kolom sistem tidak dimasukkan ke custom_data.
   const systemFields = new Set(
     [
       registrationField,
@@ -203,12 +226,8 @@ document.addEventListener("DOMContentLoaded", async () => {
     missing.push("Kolom WhatsApp harus menggunakan Nomor telepon atau Jawaban singkat");
   }
 
-  if (
-    event.registration_type !== "individual" &&
-    !teamNameField
-  ) {
-    missing.push("Nama Tim atau Nama Klub untuk pendaftaran Tim/Grup");
-  }
+  // Tidak lagi ada validasi Nama Tim yang menggagalkan formulir.
+  // Sistem sudah membuat kolom Nama Tim/Klub secara otomatis.
 
   const registrationOptions = Array.isArray(registrationField?.options)
     ? registrationField.options.map(String)
@@ -240,6 +259,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 
   const today = new Date().toISOString().slice(0, 10);
+
   const closed =
     event.registration_deadline &&
     event.registration_deadline < today;
@@ -288,6 +308,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   function renderCustomField(field) {
     const key = fieldKey(field);
     const required = Boolean(field.is_required);
+
     const options = Array.isArray(field.options)
       ? field.options.map(String).filter(x => x.trim())
       : [];
@@ -368,6 +389,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     if (field.field_type === "photo_upload" || field.field_type === "document_upload") {
       const isPhoto = field.field_type === "photo_upload";
+
       const accept = isPhoto
         ? "image/jpeg,image/png,image/webp"
         : ".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv";
@@ -398,6 +420,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
 
     const allowedTypes = ["text", "number", "date", "time", "email", "tel"];
+
     const inputType = allowedTypes.includes(field.field_type)
       ? field.field_type
       : "text";
@@ -547,7 +570,10 @@ document.addEventListener("DOMContentLoaded", async () => {
       if (renderedSpecial.has(participantNameField)) return "";
 
       renderedSpecial.add(participantNameField);
-      if (participantRoleField) renderedSpecial.add(participantRoleField);
+
+      if (participantRoleField) {
+        renderedSpecial.add(participantRoleField);
+      }
 
       return renderParticipantSection();
     }
@@ -636,7 +662,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     area.innerHTML = `
       <div class="notice">
         Formulir tidak dapat dibentuk. Pastikan kolom Nama Atlet/Nama Peserta
-        dan Nomor WhatsApp sudah dibuat di Form Builder Admin.
+        sudah dibuat di Form Builder Admin.
       </div>
     `;
     return;
@@ -738,7 +764,10 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   function updateRegistrationMode() {
     const teamMode = isTeamMode();
-    const rows = [...people.querySelectorAll(".reo-builder-person")];
+
+    const rows = [
+      ...people.querySelectorAll(".reo-builder-person")
+    ];
 
     if (!teamMode && rows.length > 1) {
       rows.slice(1).forEach(row => row.remove());
@@ -751,6 +780,10 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     if (teamInput) {
       teamInput.required = teamMode;
+
+      if (!teamMode) {
+        teamInput.value = "";
+      }
     }
 
     if (teamMode) {
@@ -761,6 +794,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
 
     const help = $("#participant-add-help");
+
     if (help) {
       help.textContent = teamMode
         ? "Anda dapat menambahkan anggota tim. Maksimal 50 peserta dalam satu pendaftaran."
@@ -790,18 +824,21 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
 
   type.addEventListener("change", updateRegistrationMode);
+
   resetPeople();
 
   // ------------------------------------------------
   // 8. PRATINJAU PILIHAN FILE
   // ------------------------------------------------
 
-  form.addEventListener("change", event => {
-    const input = event.target.closest("[data-upload-field]");
+  form.addEventListener("change", changeEvent => {
+    const input = changeEvent.target.closest("[data-upload-field]");
+
     if (!input) return;
 
     const file = input.files?.[0];
     const key = input.dataset.uploadKey;
+
     const preview = form.querySelector(
       `[data-upload-preview="${CSS.escape(key)}"]`
     );
@@ -811,24 +848,32 @@ document.addEventListener("DOMContentLoaded", async () => {
         preview.hidden = true;
         preview.textContent = "";
       }
+
       return;
     }
 
     const isPhoto = input.dataset.uploadKind === "photo";
-    const maxBytes = isPhoto ? 5 * 1024 * 1024 : 10 * 1024 * 1024;
+    const maxBytes = isPhoto
+      ? 5 * 1024 * 1024
+      : 10 * 1024 * 1024;
 
     if (file.size > maxBytes) {
       input.value = "";
       preview.hidden = true;
+
       alert(
         isPhoto
           ? "Ukuran foto maksimal 5 MB."
           : "Ukuran dokumen maksimal 10 MB."
       );
+
       return;
     }
 
-    if (isPhoto && !["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
+    if (
+      isPhoto &&
+      !["image/jpeg", "image/png", "image/webp"].includes(file.type)
+    ) {
       input.value = "";
       preview.hidden = true;
       alert("Format foto harus JPG, JPEG, PNG, atau WebP.");
@@ -858,6 +903,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   async function getRegistrationErrorDetail(error) {
     const context = error?.context;
     const status = Number(context?.status || error?.status || 0);
+
     let responseText = "";
 
     try {
@@ -867,33 +913,40 @@ document.addEventListener("DOMContentLoaded", async () => {
         responseText = await context.text();
       }
     } catch (readError) {
-      console.warn("Tidak dapat membaca isi respons Edge Function:", readError);
+      console.warn(
+        "Tidak dapat membaca isi respons Edge Function:",
+        readError
+      );
     }
 
     let serverMessage = "";
+
     if (responseText) {
       try {
         const parsed = JSON.parse(responseText);
+
         serverMessage =
           parsed.error ||
           parsed.message ||
           parsed.msg ||
           parsed.details ||
           JSON.stringify(parsed);
+
       } catch {
         serverMessage = responseText;
       }
     }
 
-    // Batasi panjang agar layar HP tetap mudah dibaca.
     serverMessage = String(serverMessage || "").trim().slice(0, 1400);
 
     if (status && serverMessage) {
       return `Server menolak pendaftaran (HTTP ${status}): ${serverMessage}`;
     }
+
     if (status) {
       return `Server menolak pendaftaran (HTTP ${status}). Periksa log Edge Function quick-responder di Supabase.`;
     }
+
     if (serverMessage) {
       return serverMessage;
     }
@@ -983,29 +1036,45 @@ document.addEventListener("DOMContentLoaded", async () => {
       return;
     }
 
-    // Ambil file unggahan dan validasi ulang sebelum mengirim ke Supabase Storage.
+    // Ambil file unggahan dan validasi ulang.
     const selectedUploads = [
       ...form.querySelectorAll("[data-upload-field]")
-    ].filter(input => input.files && input.files.length > 0);
+    ].filter(input =>
+      input.files && input.files.length > 0
+    );
 
     for (const input of selectedUploads) {
       const file = input.files[0];
       const isPhoto = input.dataset.uploadKind === "photo";
-      const maxBytes = isPhoto ? 5 * 1024 * 1024 : 10 * 1024 * 1024;
+
+      const maxBytes = isPhoto
+        ? 5 * 1024 * 1024
+        : 10 * 1024 * 1024;
 
       if (file.size > maxBytes) {
-        alert(isPhoto ? "Ukuran foto maksimal 5 MB." : "Ukuran dokumen maksimal 10 MB.");
+        alert(
+          isPhoto
+            ? "Ukuran foto maksimal 5 MB."
+            : "Ukuran dokumen maksimal 10 MB."
+        );
+
         input.focus();
         return;
       }
 
-      if (isPhoto && !["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
+      if (
+        isPhoto &&
+        !["image/jpeg", "image/png", "image/webp"].includes(file.type)
+      ) {
         alert("Foto harus berformat JPG, JPEG, atau WebP.");
         input.focus();
         return;
       }
 
-      if (!isPhoto && !/\.(pdf|doc|docx|xls|xlsx|ppt|pptx|txt|csv)$/i.test(file.name)) {
+      if (
+        !isPhoto &&
+        !/\.(pdf|doc|docx|xls|xlsx|ppt|pptx|txt|csv)$/i.test(file.name)
+      ) {
         alert("Format dokumen belum didukung.");
         input.focus();
         return;
@@ -1013,6 +1082,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
 
     const button = form.querySelector('[type="submit"]');
+
     button.disabled = true;
     button.textContent = "Mengirim...";
 
@@ -1035,7 +1105,11 @@ document.addEventListener("DOMContentLoaded", async () => {
 
         if (field.field_type === "checkbox") {
           const values = fd.getAll(key).map(String);
-          if (values.length) custom[key] = values;
+
+          if (values.length) {
+            custom[key] = values;
+          }
+
           return;
         }
 
@@ -1054,11 +1128,14 @@ document.addEventListener("DOMContentLoaded", async () => {
       for (const input of selectedUploads) {
         const key = input.dataset.uploadKey;
         const file = input.files[0];
+
         const safeName = file.name
           .normalize("NFKD")
           .replace(/[^a-zA-Z0-9._-]/g, "_")
           .slice(-100) || "file";
-        const objectPath = `${event.id}/${key}/${crypto.randomUUID()}-${safeName}`;
+
+        const objectPath =
+          `${event.id}/${key}/${crypto.randomUUID()}-${safeName}`;
 
         button.textContent = "Mengunggah file...";
 
@@ -1071,10 +1148,13 @@ document.addEventListener("DOMContentLoaded", async () => {
           });
 
         if (uploadError) {
-          throw new Error(`Gagal mengunggah ${file.name}: ${uploadError.message}`);
+          throw new Error(
+            `Gagal mengunggah ${file.name}: ${uploadError.message}`
+          );
         }
 
         uploadedFiles.push(objectPath);
+
         custom[key] = {
           bucket: "registration-files",
           path: objectPath,
@@ -1105,7 +1185,10 @@ document.addEventListener("DOMContentLoaded", async () => {
       );
 
       if (error) throw error;
-      if (data?.error) throw new Error(data.error);
+
+      if (data?.error) {
+        throw new Error(data.error);
+      }
 
       if (!data?.token) {
         throw new Error(
@@ -1155,10 +1238,11 @@ document.addEventListener("DOMContentLoaded", async () => {
     } catch (error) {
       console.error("Pendaftaran event:", error);
 
-      // Jika pendaftaran gagal setelah upload, file tetap private.
-      // Simpan path pada console untuk membantu Admin melakukan pemeriksaan.
       if (uploadedFiles.length) {
-        console.warn("File unggahan yang perlu diperiksa:", uploadedFiles);
+        console.warn(
+          "File unggahan yang perlu diperiksa:",
+          uploadedFiles
+        );
       }
 
       const errorDetail = await getRegistrationErrorDetail(error);
@@ -1180,13 +1264,14 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
   });
 
-
   // ------------------------------------------------
   // 10. STYLE FORMULIR PUBLIK
   // ------------------------------------------------
 
   function injectRegistrationStyles() {
-    if (document.getElementById("rajawali-google-form-public-css")) return;
+    if (document.getElementById("rajawali-google-form-public-css")) {
+      return;
+    }
 
     const style = document.createElement("style");
     style.id = "rajawali-google-form-public-css";
@@ -1352,8 +1437,13 @@ document.addEventListener("DOMContentLoaded", async () => {
       }
 
       @media(max-width:700px){
-        .gf-public-question{padding:13px}
-        .gf-public-title{font-size:12px}
+        .gf-public-question{
+          padding:13px
+        }
+
+        .gf-public-title{
+          font-size:12px
+        }
       }
     `;
 
